@@ -25,14 +25,9 @@ def _dho_parameter_names(expected_peaks: int) -> list:
 _MEASUREMENT_GROUP_TYPES = {"Measure", "Calibration_spectrum", "Impulse_response"}
 
 
+import h5py
+
 def _open_hdf5_bls(filepath, mode="r"):
-    try:
-        import h5py
-    except ImportError as exc:
-        raise ImportError(
-            "Reading/writing the HDF5_BLS format natively requires the 'h5py' package. "
-            "Install it with 'pip install h5py'."
-        ) from exc
     return h5py.File(filepath, mode)
 
 
@@ -82,12 +77,10 @@ def list_measurements(filepath: str) -> list:
 
 def from_hdf5_bls(filepath: str, measure_group: Optional[str] = None) -> core.SpectralObject:
     """
-    Read a measurement stored in the HDF5_BLS format
+    Read a measurement stored in the HDF5_BLS norm for storing in a HDF5 format
     (https://github.com/bio-brillouin/HDF5_BLS) back into a brillouinpy
     spectral object, ready for further processing (preprocessing pipelines,
     fitting, ...).
-
-    Requires the ``HDF5_BLS`` package (``pip install HDF5_BLS``).
 
     Parameters
     ----------
@@ -216,9 +209,7 @@ def to_hdf5_bls(
 ) -> None:
     """
     Export a spectral object (and, optionally, a peak-fit result) to an HDF5 file
-    compatible with the HDF5_BLS format (https://github.com/bio-brillouin/HDF5_BLS).
-
-    Requires the ``HDF5_BLS`` package (``pip install HDF5_BLS``).
+    compatible with the HDF5_BLS norm for storing in a HDF5 format (https://github.com/bio-brillouin/HDF5_BLS).
 
     Parameters
     ----------

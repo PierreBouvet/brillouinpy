@@ -177,6 +177,8 @@ cython_debug/
 # Personal directories
 .audit/
 .todo/
+.perso_code/
 
 # Compiled python files
+__pycache__
 *.pyc

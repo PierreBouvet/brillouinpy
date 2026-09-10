@@ -28,12 +28,13 @@ dependencies = [
     "scikit-image",
     "scikit-learn",
     "tifffile",
+    "h5py",
 ]
 
 [project.optional-dependencies]
 # 'brim' export/import (io.export.to_brim/from_brim) needs Python >= 3.11
 brim = ["brimfile"]
-hdf5_bls = ["HDF5_BLS"]
+
 # Only the PPI / FIPPI / NFINDR endmember-extraction methods in analysis.unmix
 # need this; VCA and all abundance methods are pure NumPy/SciPy.
 unmix-eea = ["pysptools"]
