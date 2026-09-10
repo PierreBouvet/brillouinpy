@@ -101,7 +101,7 @@ class SIFLoader:
         return None
 
 
-def import_measurement(filepath, instrument_type, save_hdf5=True, hdf5_filepath=None):
+def import_measurement(filepath, instrument_type, save_hdf5=False, hdf5_filepath=None):
     """
     Ease the import of different data types by automatically delegating to the 
     appropriate extension-based object and technique-specific import function.
@@ -115,7 +115,7 @@ def import_measurement(filepath, instrument_type, save_hdf5=True, hdf5_filepath=
     instrument_type : str
         The type of instrument used to capture the data (e.g., "JRS-TFP", "Andor").
     save_hdf5 : bool, optional
-        Whether to save the parsed data to an HDF5_BLS file automatically (default is True).
+        Whether to save the parsed data to an HDF5_BLS file automatically (default is False).
     hdf5_filepath : str, optional
         Custom filepath to save the HDF5_BLS file. If None, it defaults to the same 
         directory and filename as the input file, but with an .h5 extension.

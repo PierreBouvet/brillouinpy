@@ -189,6 +189,41 @@ class SpectralContainer:
             parts.append(f"channels={{{chans}}}")
         return f"{type(self).__name__}({', '.join(parts)})"
 
+    def __str__(self):
+        import shutil
+        terminal_width = shutil.get_terminal_size((80, 20)).columns
+        
+        lines = [f"--- {type(self).__name__} ---"]
+        lines.append(f"Data shape: {self.spectral_data.shape}")
+        lines.append(f"Spectral axis length: {len(self.spectral_axis)}")
+        
+        chans = list(self.channels.keys()) if self.channels else []
+        lines.append(f"Channels: {len(chans)}" + (f" ({', '.join(chans)})" if chans else ""))
+        
+        has_irf = "Yes" if self.instrument_response_function is not None else "No"
+        lines.append(f"IRF present: {has_irf}")
+        
+        px = self.px_size_um
+        if px and any(v is not None for v in px.values()):
+            px_str = ", ".join(f"{k}={v}" for k, v in px.items())
+            lines.append(f"Pixel size (\u03bcm): {px_str}")
+        else:
+            lines.append("Pixel size (\u03bcm): None")
+            
+        has_meta = "Yes" if self.metadata else "No"
+        meta_count = len(self.metadata) if self.metadata else 0
+        lines.append(f"Metadata present: {has_meta}" + (f" ({meta_count} entries)" if meta_count else ""))
+        
+        if self.metadata:
+            for k, v in self.metadata.items():
+                entry_str = f"  - {k}: {v}"
+                # Crop if longer than terminal width
+                if len(entry_str) > terminal_width:
+                    entry_str = entry_str[:terminal_width - 3] + "..."
+                lines.append(entry_str)
+            
+        return "\n".join(lines)
+
     @property
     def channels_grid_conformant(self) -> dict:
         """
