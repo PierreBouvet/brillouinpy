@@ -25,25 +25,30 @@ def _dho_parameter_names(expected_peaks: int) -> list:
 _MEASUREMENT_GROUP_TYPES = {"Measure", "Calibration_spectrum", "Impulse_response"}
 
 
-def _open_hdf5_bls(filepath):
+def _open_hdf5_bls(filepath, mode="r"):
     try:
-        from HDF5_BLS import Wrapper
+        import h5py
     except ImportError as exc:
         raise ImportError(
-            "Reading/writing the HDF5_BLS format requires the 'HDF5_BLS' package. "
-            "Install it with 'pip install HDF5_BLS'."
+            "Reading/writing the HDF5_BLS format natively requires the 'h5py' package. "
+            "Install it with 'pip install h5py'."
         ) from exc
-    return Wrapper(filepath)
+    return h5py.File(filepath, mode)
 
 
-def _find_measurement_groups(structure: dict, path: str = "Brillouin") -> list:
+def _find_measurement_groups(group, path: str = "") -> list:
     groups = []
-    if structure.get("Brillouin_type") in _MEASUREMENT_GROUP_TYPES:
-        groups.append(path)
-    for key, child in structure.items():
-        if key == "Brillouin_type" or not isinstance(child, dict):
-            continue
-        groups.extend(_find_measurement_groups(child, f"{path}/{key}"))
+    brillouin_type = group.attrs.get("Brillouin_type", b"")
+    if isinstance(brillouin_type, bytes):
+        brillouin_type = brillouin_type.decode("utf-8")
+        
+    if brillouin_type in _MEASUREMENT_GROUP_TYPES:
+        groups.append(path if path else group.name)
+        
+    for key, child in group.items():
+        if hasattr(child, "items"):
+            child_path = f"{path}/{key}" if path else key
+            groups.extend(_find_measurement_groups(child, child_path))
     return groups
 
 
@@ -65,11 +70,14 @@ def list_measurements(filepath: str) -> list:
     list[str]
         The full paths (e.g. "Brillouin/Measure") of the measurement groups found.
     """
-    wrapper = _open_hdf5_bls(filepath)
+    f = _open_hdf5_bls(filepath, "r")
     try:
-        return _find_measurement_groups(wrapper.get_structure()["Brillouin"])
+        root = f.get("Brillouin")
+        if root is None:
+            return []
+        return _find_measurement_groups(root, "Brillouin")
     finally:
-        wrapper.close()
+        f.close()
 
 
 def from_hdf5_bls(filepath: str, measure_group: Optional[str] = None) -> core.SpectralObject:
@@ -100,10 +108,14 @@ def from_hdf5_bls(filepath: str, measure_group: Optional[str] = None) -> core.Sp
         instance (chosen automatically based on the dimensionality of the stored
         data), with the group's attributes attached as a ``metadata`` dict.
     """
-    wrapper = _open_hdf5_bls(filepath)
+    f = _open_hdf5_bls(filepath, "r")
     try:
+        root = f.get("Brillouin")
+        if root is None:
+            raise ValueError("Invalid file structure: no 'Brillouin' root group.")
+            
         if measure_group is None:
-            candidates = _find_measurement_groups(wrapper.get_structure()["Brillouin"])
+            candidates = _find_measurement_groups(root, "Brillouin")
             if len(candidates) != 1:
                 raise ValueError(
                     "Could not determine which measurement group to read automatically "
@@ -111,31 +123,81 @@ def from_hdf5_bls(filepath: str, measure_group: Optional[str] = None) -> core.Sp
                     "use brillouinpy.io.list_measurements(filepath) to see the options."
                 )
             measure_group = candidates[0]
-        elif measure_group not in _find_measurement_groups(wrapper.get_structure()["Brillouin"]):
+        elif measure_group not in _find_measurement_groups(root, "Brillouin"):
             raise ValueError(
                 f"'{measure_group}' is not a measurement group in '{filepath}'. "
                 "Use brillouinpy.io.list_measurements(filepath) to see the available options."
             )
 
-        psd_names = wrapper.get_children_elements(measure_group, Brillouin_type="PSD")
-        if not psd_names:
-            psd_names = wrapper.get_children_elements(measure_group, Brillouin_type="Raw_data")
-            if not psd_names:
-                raise ValueError(f"No PSD or Raw_data dataset found under '{measure_group}'.")
+        grp = f.get(measure_group)
+        if grp is None:
+            raise ValueError(f"Group {measure_group} not found.")
 
-        freq_names = wrapper.get_children_elements(measure_group, Brillouin_type="Frequency")
-        if not freq_names:
+        psd_name, freq_name = None, None
+        channels = {}
+        px_size_um = {"x": None, "y": None, "z": None}
+
+        for key, item in grp.items():
+            btype = item.attrs.get("Brillouin_type", b"")
+            if isinstance(btype, bytes): btype = btype.decode("utf-8")
+            
+            if btype in ("PSD", "Raw_data"):
+                psd_name = key
+            elif btype == "Frequency":
+                freq_name = key
+            elif btype == "Other":
+                channels[key] = np.asarray(item)
+            elif btype == "Abscissa_X_Y":
+                unit = item.attrs.get("Unit", b"")
+                if isinstance(unit, bytes): unit = unit.decode("utf-8")
+                if unit in ("um", "µm", "micron", "microns", "micrometer", "micrometre", "micrometers", "micrometres"):
+                    arr = np.asarray(item)
+                    if len(arr) > 1:
+                        step = arr[1] - arr[0]
+                        dim_start = item.attrs.get("Dim_start", -1)
+                        if dim_start == 0: px_size_um["x"] = float(step)
+                        elif dim_start == 1: px_size_um["y"] = float(step)
+                        elif dim_start == 2: px_size_um["z"] = float(step)
+
+        if not psd_name:
+            raise ValueError(f"No PSD or Raw_data dataset found under '{measure_group}'.")
+        if not freq_name:
             raise ValueError(f"No Frequency dataset found under '{measure_group}'.")
 
-        intensity_data = np.asarray(wrapper[f"{measure_group}/{psd_names[0]}"])
-        spectral_axis = np.asarray(wrapper[f"{measure_group}/{freq_names[0]}"])
+        intensity_data = np.asarray(grp[psd_name])
+        spectral_axis = np.asarray(grp[freq_name])
 
-        spectral_object = core._create_data(intensity_data, spectral_axis)
-        spectral_object.metadata = wrapper.get_attributes(measure_group)
+        metadata = {}
+        for k, v in grp.attrs.items():
+            if isinstance(v, bytes): v = v.decode("utf-8")
+            if k != "Brillouin_type":
+                metadata[k] = v
+
+        irf = None
+        for key, item in root.items():
+            if hasattr(item, "items"):
+                btype = item.attrs.get("Brillouin_type", b"")
+                if isinstance(btype, bytes): btype = btype.decode("utf-8")
+                if btype == "Impulse_response":
+                    for subkey, subitem in item.items():
+                        stype = subitem.attrs.get("Brillouin_type", b"")
+                        if isinstance(stype, bytes): stype = stype.decode("utf-8")
+                        if stype in ("PSD", "Raw_data"):
+                            irf = np.asarray(subitem)
+                            break
+                    break
+
+        spectral_object = core._create_data(
+            intensity_data, spectral_axis, metadata=metadata,
+            px_size_um=px_size_um, instrument_response_function=irf,
+            channels=channels if channels else None
+        )
+        if np.isnan(intensity_data).any():
+            spectral_object.spectral_data = np.ma.masked_invalid(intensity_data)
 
         return spectral_object
     finally:
-        wrapper.close()
+        f.close()
 
 
 def to_hdf5_bls(
@@ -188,32 +250,64 @@ def to_hdf5_bls(
     overwrite : bool, optional
         Overwrite ``filepath`` if it already exists, by default False.
     """
-    wrapper = _open_hdf5_bls(None)
+    mode = "w" if overwrite else "w-"
+    f = _open_hdf5_bls(filepath, mode)
     try:
-        wrapper.create_group("Measure", parent_group="Brillouin", brillouin_type="Measure")
-        wrapper.add_PSD(np.ma.filled(spectral_object.spectral_data, np.nan), parent_group="Brillouin/Measure")
-        wrapper.add_frequency(np.asarray(spectral_object.spectral_axis), parent_group="Brillouin/Measure")
-
+        root = f.create_group("Brillouin")
+        root.attrs["Brillouin_type"] = "Root"
+        
+        measure = root.create_group("Measure")
+        measure.attrs["Brillouin_type"] = "Measure"
+        
+        psd_data = np.ma.filled(spectral_object.spectral_data, np.nan)
+        ds_psd = measure.create_dataset("PSD", data=psd_data)
+        ds_psd.attrs["Brillouin_type"] = "PSD"
+        
+        ds_freq = measure.create_dataset("Frequency", data=np.asarray(spectral_object.spectral_axis))
+        ds_freq.attrs["Brillouin_type"] = "Frequency"
+        
         shape = spectral_object.shape
+        if x_step is None and "x" in spectral_object.px_size_um and spectral_object.px_size_um["x"] is not None:
+            x_step = spectral_object.px_size_um["x"]
+        if y_step is None and "y" in spectral_object.px_size_um and spectral_object.px_size_um["y"] is not None:
+            y_step = spectral_object.px_size_um["y"]
+
         if shape != (1,):
             if len(shape) >= 1:
                 x_axis = np.arange(shape[0]) * (x_step if x_step else 1)
-                wrapper.add_abscissa(
-                    x_axis, parent_group="Brillouin/Measure", name="X",
-                    unit=spatial_unit if x_step else "px", dim_start=0, dim_end=1,
-                )
+                ds_x = measure.create_dataset("Abscissa_0_1", data=x_axis)
+                ds_x.attrs["Brillouin_type"] = "Abscissa_X_Y"
+                ds_x.attrs["Dim_start"] = 0
+                ds_x.attrs["Dim_end"] = 1
+                ds_x.attrs["Unit"] = spatial_unit if x_step else "px"
             if len(shape) >= 2:
                 y_axis = np.arange(shape[1]) * (y_step if y_step else 1)
-                wrapper.add_abscissa(
-                    y_axis, parent_group="Brillouin/Measure", name="Y",
-                    unit=spatial_unit if y_step else "px", dim_start=1, dim_end=2,
-                )
+                ds_y = measure.create_dataset("Abscissa_1_2", data=y_axis)
+                ds_y.attrs["Brillouin_type"] = "Abscissa_X_Y"
+                ds_y.attrs["Dim_start"] = 1
+                ds_y.attrs["Dim_end"] = 2
+                ds_y.attrs["Unit"] = spatial_unit if y_step else "px"
+
+        if spectral_object.instrument_response_function is not None:
+            irf_grp = root.create_group("Impulse_response")
+            irf_grp.attrs["Brillouin_type"] = "Impulse_response"
+            ds_irf = irf_grp.create_dataset("PSD", data=np.asarray(spectral_object.instrument_response_function))
+            ds_irf.attrs["Brillouin_type"] = "PSD"
+            
+        for ch_name, ch_data in spectral_object.channels.items():
+            ds_ch = measure.create_dataset(ch_name, data=np.asarray(ch_data))
+            ds_ch.attrs["Brillouin_type"] = "Other"
 
         meta = dict(attributes or {})
         if sample is not None:
-            meta["Sample"] = sample
-        if meta:
-            wrapper.add_attributes(meta, parent_group="Brillouin/Measure")
+            meta["MEASURE.Sample"] = sample
+        
+        for k, v in spectral_object.metadata.items():
+            if k not in meta:
+                meta[k] = v
+
+        for k, v in meta.items():
+            measure.attrs[k] = v
 
         if fit_result is not None:
             fit_result = np.asarray(fit_result)
@@ -232,28 +326,28 @@ def to_hdf5_bls(
                 )
 
             n_peaks = (n_params - 2) // 3
-            wrapper.create_group("Treatment", parent_group="Brillouin", brillouin_type="Treatment")
+            treatment = root.create_group("Treatment")
+            treatment.attrs["Brillouin_type"] = "Treatment"
 
             for i in range(n_peaks):
-                wrapper.add_treated_data(
-                    parent_group="Brillouin/Treatment",
-                    name_group=f"Treat_{i}",
-                    amplitude=np.asarray(fit_result[..., 3 * i]),
-                    shift=np.asarray(fit_result[..., 3 * i + 1]),
-                    # brillouinpy's LineWidth is the HWHM; HDF5_BLS uses the FWHM.
-                    linewidth=np.asarray(2.0 * fit_result[..., 3 * i + 2]),
-                )
+                tg = treatment.create_group(f"Treat_{i}")
+                tg.attrs["Brillouin_type"] = "Treatment"
+                
+                ds_amp = tg.create_dataset("Amplitude", data=np.asarray(fit_result[..., 3 * i]))
+                ds_amp.attrs["Brillouin_type"] = "Amplitude"
+                
+                ds_shift = tg.create_dataset("Shift", data=np.asarray(fit_result[..., 3 * i + 1]))
+                ds_shift.attrs["Brillouin_type"] = "Shift"
+                
+                ds_lw = tg.create_dataset("Linewidth", data=np.asarray(2.0 * fit_result[..., 3 * i + 2]))
+                ds_lw.attrs["Brillouin_type"] = "Linewidth"
 
             for j, name in enumerate(parameter_names[3 * n_peaks:]):
-                wrapper.add_other(
-                    np.asarray(fit_result[..., 3 * n_peaks + j]),
-                    parent_group="Brillouin/Treatment",
-                    name=name,
-                )
+                ds_other = treatment.create_dataset(name, data=np.asarray(fit_result[..., 3 * n_peaks + j]))
+                ds_other.attrs["Brillouin_type"] = "Other"
 
-        wrapper.save_as_hdf5(filepath, overwrite=overwrite)
     finally:
-        wrapper.close()
+        f.close()
 
 
 def fit_to_tiff(

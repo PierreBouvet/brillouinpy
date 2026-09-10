@@ -16,7 +16,6 @@ from __future__ import annotations  # default if Python >= 3.10
 import copy
 from numbers import Number
 import os
-import pickle
 from typing import List, Union
 import numpy as np
 from scipy.signal import find_peaks
@@ -298,7 +297,7 @@ class SpectralContainer:
 
     def save(self, filename: str, directory: str = None):
         """
-        Save the spectral object to a pickle file.
+        Save the spectral object to an HDF5_BLS file.
 
         Parameters
         ----------
@@ -308,22 +307,22 @@ class SpectralContainer:
             The name of the directory to save the file in. Must be the full path to the directory or the path relative
             to the working directory. If not provided (default), the file will be saved in the working directory.
         """
+        from .io.export import to_hdf5_bls
         full_filename = os.path.join(directory, filename) if directory is not None else filename
-        with open(full_filename, 'wb') as f:
-            pickle.dump(self, f)
+        to_hdf5_bls(self, full_filename, overwrite=True)
 
     @staticmethod
     def load(filename: str):
         """
-        Load a spectral object from a pickle file.
+        Load a spectral object from an HDF5_BLS file.
 
         Parameters
         ----------
         filename : str
             The name of the file to load a spectral object from. Must be the full path or the path relative to the working directory.
         """
-        with open(filename, 'rb') as f:
-            return pickle.load(f)
+        from .io.export import from_hdf5_bls
+        return from_hdf5_bls(filename)
 
     @classmethod
     def from_stack(cls, stack: List[Spectrum]) -> SpectralContainer:
